@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-test:
+    name: ${{ matrix.cc }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:  [ubuntu-latest, ubuntu-22.04]
+        cc:  [gcc, clang]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Clang
+        if: matrix.cc == 'clang'
+        run: sudo apt-get install -y clang
+
+      - name: Build (generic, no -march=native)
+        run: make CC=${{ matrix.cc }}
+
+      - name: Run test suite
+        run: make test
+
+      - name: Benchmark (offline only, threshold 20ms)
+        run: make bench
+
+  # Test on a wider set of distros via Docker
+  distro-compat:
+    name: distro / ${{ matrix.image }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:12
+          - debian:11
+          - fedora:40
+          - archlinux:latest
+
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build deps (Debian/Ubuntu)
+        if: startsWith(matrix.image, 'debian')
+        run: apt-get update && apt-get install -y gcc make
+
+      - name: Install build deps (Fedora)
+        if: startsWith(matrix.image, 'fedora')
+        run: dnf install -y gcc make
+
+      - name: Install build deps (Arch)
+        if: startsWith(matrix.image, 'archlinux')
+        run: pacman -Sy --noconfirm gcc make
+
+      - name: Build
+        run: make
+
+      - name: Run test suite
+        run: make test
+
+      - name: Benchmark
+        run: make bench
