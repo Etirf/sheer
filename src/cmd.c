@@ -2564,6 +2564,207 @@ static void analyze_xargs(const TokList *tl, Analysis *out)
                  "Try: xargs echo %s first to preview what would be passed.", subcmd);
 }
 
+/* ----------------------------------------------------------- heroku cli */
+
+static void analyze_heroku_destroy(const TokList *tl, Analysis *out)
+{
+    const char *app = tok_long_val(tl, "--app");
+    if (!app) app   = tok_short_val(tl, 'a');
+
+    if (app)
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently destroys the Heroku app '%s' and all its resources "
+                 "(dynos, add-ons, config vars, release history).", app);
+    else
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently destroys a Heroku app and all its resources "
+                 "(dynos, add-ons, config vars, release history).");
+    out->risk = RISK_CRITICAL;
+    snprintf(out->warning, sizeof out->warning,
+             "This action is irreversible. All dynos, add-ons, SSL certificates, "
+             "config vars, and release history are permanently deleted.");
+    snprintf(out->safer, sizeof out->safer,
+             "You will be prompted to type the app name to confirm before deletion.");
+}
+
+static void analyze_heroku_run(const TokList *tl, Analysis *out)
+{
+    bool detached = tok_has_short(tl, 'd') || tok_has_long(tl, "--no-tty");
+
+    const char *subcmd = NULL;
+    for (int i = 2; i < tl->n; i++) {
+        if (tl->t[i].type == TT_WORD) { subcmd = tl->t[i].s; break; }
+    }
+
+    if (subcmd)
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs '%s' as a one-off dyno on Heroku%s.",
+                 subcmd, detached ? " (detached)" : " (interactive)");
+    else
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a one-off command in a new Heroku dyno.");
+    out->risk = RISK_MEDIUM;
+    snprintf(out->warning, sizeof out->warning,
+             "One-off dynos have full access to app config vars and the database. "
+             "Each dyno incurs charges while it runs.");
+}
+
+static void analyze_heroku_ps_scale(const TokList *tl, Analysis *out)
+{
+    const char *spec = NULL;
+    for (int i = 2; i < tl->n; i++) {
+        if (tl->t[i].type == TT_WORD) { spec = tl->t[i].s; break; }
+    }
+
+    if (spec)
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Scales Heroku dyno formation to %s.", spec);
+    else
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Scales the Heroku dyno formation.");
+    out->risk = RISK_MEDIUM;
+
+    if (spec && strstr(spec, "=0"))
+        snprintf(out->warning, sizeof out->warning,
+                 "Scaling a process type to 0 stops all dynos of that type, "
+                 "which may take the app offline.");
+}
+
+static void analyze_heroku_config_set(const TokList *tl, Analysis *out)
+{
+    (void)tl;
+    snprintf(out->explanation, sizeof out->explanation,
+             "Sets one or more Heroku config vars (environment variables). "
+             "All dynos will restart automatically.");
+    out->risk = RISK_MEDIUM;
+    snprintf(out->warning, sizeof out->warning,
+             "Changing config vars triggers an automatic restart of all dynos. "
+             "Avoid passing secrets directly on the CLI - they end up in shell "
+             "history.");
+}
+
+static void analyze_heroku_config_unset(const TokList *tl, Analysis *out)
+{
+    (void)tl;
+    snprintf(out->explanation, sizeof out->explanation,
+             "Removes one or more Heroku config vars. All dynos will restart.");
+    out->risk = RISK_MEDIUM;
+    snprintf(out->warning, sizeof out->warning,
+             "Removing a config var that the app depends on will cause errors "
+             "after the restart.");
+}
+
+static void analyze_heroku_releases_rollback(const TokList *tl, Analysis *out)
+{
+    const Tok *ver = tok_first_word(tl, 2);
+
+    if (ver)
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Rolls the Heroku app back to release %s.", ver->s);
+    else
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Rolls the Heroku app back to the previous release.");
+    out->risk = RISK_MEDIUM;
+    snprintf(out->warning, sizeof out->warning,
+             "Rollback reverts the slug and config vars only - it does NOT roll "
+             "back database migrations or other stateful changes.");
+}
+
+static void analyze_heroku_pg_reset(const TokList *tl, Analysis *out)
+{
+    (void)tl;
+    snprintf(out->explanation, sizeof out->explanation,
+             "Wipes and resets a Heroku Postgres database to a blank state.");
+    out->risk = RISK_CRITICAL;
+    snprintf(out->warning, sizeof out->warning,
+             "All data in the database will be permanently destroyed. "
+             "There is no undo.");
+    snprintf(out->safer, sizeof out->safer,
+             "Run 'heroku pg:backups:capture' first to create a backup.");
+}
+
+static void analyze_heroku_pg_backups(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper || strcmp(oper, "info") == 0 ||
+        strcmp(oper, "schedules") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Lists or inspects Heroku Postgres backups (read-only).");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "capture") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Captures a manual Heroku Postgres backup.");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "restore") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Restores a Heroku Postgres database from a backup.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "Restoring overwrites the entire current database contents.");
+    } else if (strcmp(oper, "delete") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes a Heroku Postgres backup.");
+        out->risk = RISK_MEDIUM;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a Heroku Postgres backup operation.");
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_heroku_addons_destroy(const TokList *tl, Analysis *out)
+{
+    const Tok *addon = tok_first_word(tl, 2);
+
+    if (addon)
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently destroys the Heroku add-on '%s'.", addon->s);
+    else
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently destroys a Heroku add-on.");
+    out->risk = RISK_HIGH;
+    snprintf(out->warning, sizeof out->warning,
+             "All data stored in this add-on (database contents, queue messages, "
+             "cache entries, etc.) will be permanently lost.");
+}
+
+static void analyze_heroku_addons_create(const TokList *tl, Analysis *out)
+{
+    const Tok *plan = tok_first_word(tl, 2);
+
+    if (plan)
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Provisions a new Heroku add-on: %s.", plan->s);
+    else
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Provisions a new Heroku add-on.");
+    out->risk = RISK_LOW;
+    snprintf(out->warning, sizeof out->warning,
+             "Paid add-on plans will add to your monthly Heroku bill.");
+}
+
+static void analyze_heroku_logs(const TokList *tl, Analysis *out)
+{
+    bool tail = tok_has_short(tl, 't') || tok_has_long(tl, "--tail");
+    snprintf(out->explanation, sizeof out->explanation,
+             "Displays recent Heroku application logs%s.",
+             tail ? " (streaming)" : "");
+    out->risk = RISK_SAFE;
+}
+
+static void analyze_heroku_restart(const TokList *tl, Analysis *out)
+{
+    (void)tl;
+    snprintf(out->explanation, sizeof out->explanation,
+             "Restarts all or specific dynos for the Heroku app.");
+    out->risk = RISK_MEDIUM;
+    snprintf(out->warning, sizeof out->warning,
+             "In-flight requests will be dropped during restart. "
+             "Expect a brief period of downtime.");
+}
+
 /* --------------------------------------------------------------- aws cli */
 
 static void analyze_aws_s3(const TokList *tl, Analysis *out)
@@ -3280,6 +3481,20 @@ static CmdEntry cmd_table[] = {
     { "git rebase",     analyze_git_rebase    },
     { "git reset",      analyze_git_reset     },
     { "git stash",      analyze_git_stash     },
+
+    /* heroku cli */
+    { "heroku addons:create",      analyze_heroku_addons_create      },
+    { "heroku addons:destroy",     analyze_heroku_addons_destroy     },
+    { "heroku config:set",         analyze_heroku_config_set         },
+    { "heroku config:unset",       analyze_heroku_config_unset       },
+    { "heroku destroy",            analyze_heroku_destroy            },
+    { "heroku logs",               analyze_heroku_logs               },
+    { "heroku pg:backups",         analyze_heroku_pg_backups         },
+    { "heroku pg:reset",           analyze_heroku_pg_reset           },
+    { "heroku ps:scale",           analyze_heroku_ps_scale           },
+    { "heroku releases:rollback",  analyze_heroku_releases_rollback  },
+    { "heroku restart",            analyze_heroku_restart            },
+    { "heroku run",                analyze_heroku_run                },
 
     /* aws cli */
     { "aws cloudformation", analyze_aws_cloudformation },
