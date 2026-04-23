@@ -2564,6 +2564,612 @@ static void analyze_xargs(const TokList *tl, Analysis *out)
                  "Try: xargs echo %s first to preview what would be passed.", subcmd);
 }
 
+/* --------------------------------------------------------------- aws cli */
+
+static void analyze_aws_s3(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+    bool recursive   = tok_has_long(tl, "--recursive");
+    bool del         = tok_has_long(tl, "--delete");
+    bool force       = tok_has_long(tl, "--force");
+    bool dryrun      = tok_has_long(tl, "--dryrun");
+
+    /* collect positional args that appear after the operation word */
+    const char *src = NULL, *dst = NULL;
+    bool past_op = false;
+    for (int i = 2; i < tl->n; i++) {
+        if (tl->t[i].type != TT_WORD) continue;
+        if (!past_op) { past_op = true; continue; } /* skip the operation itself */
+        if (!src)      src = tl->t[i].s;
+        else if (!dst) dst = tl->t[i].s;
+    }
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS S3 command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "ls") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Lists S3 buckets or objects%s%s.",
+                 src ? " at " : "", src ? src : "");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "mb") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new S3 bucket%s%s.",
+                 src ? " named " : "", src ? src : "");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "cp") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Copies S3 objects%s%s%s%s%s.",
+                 src ? " from " : "", src ? src : "",
+                 dst ? " to "   : "", dst ? dst : "",
+                 recursive ? " (recursive)" : "");
+        out->risk = dryrun ? RISK_SAFE : RISK_LOW;
+    } else if (strcmp(oper, "mv") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Moves (renames) S3 object(s)%s%s%s%s.",
+                 src ? " from " : "", src ? src : "",
+                 dst ? " to "   : "", dst ? dst : "");
+        out->risk = dryrun ? RISK_SAFE : RISK_LOW;
+    } else if (strcmp(oper, "sync") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Syncs%s%s%s%s%s.",
+                 src ? " "    : "", src ? src : "",
+                 dst ? " to " : "", dst ? dst : "",
+                 del ? " and deletes extra destination files" : "");
+        if (del) {
+            out->risk = dryrun ? RISK_SAFE : RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "--delete removes objects in the destination that are absent in "
+                     "the source. Syncing from an empty path with --delete wipes the "
+                     "destination.");
+            snprintf(out->safer, sizeof out->safer,
+                     "Add --dryrun to preview what would be deleted first.");
+        } else {
+            out->risk = dryrun ? RISK_SAFE : RISK_LOW;
+        }
+    } else if (strcmp(oper, "rm") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes S3 object(s)%s%s%s.",
+                 src ? " at " : "", src ? src : "",
+                 recursive ? " recursively" : "");
+        out->risk = dryrun ? RISK_SAFE : (recursive ? RISK_HIGH : RISK_MEDIUM);
+        if (recursive && !dryrun) {
+            snprintf(out->warning, sizeof out->warning,
+                     "--recursive deletes every object under the prefix permanently "
+                     "(unless versioning is enabled on the bucket).");
+            snprintf(out->safer, sizeof out->safer,
+                     "Add --dryrun to preview which objects would be deleted.");
+        }
+    } else if (strcmp(oper, "rb") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Removes S3 bucket%s%s%s.",
+                 src ? " " : "", src ? src : "",
+                 force ? " and all its contents (--force)" : "");
+        out->risk = force ? RISK_CRITICAL : RISK_HIGH;
+        if (force)
+            snprintf(out->warning, sizeof out->warning,
+                     "--force deletes all objects before removing the bucket. "
+                     "All data is permanently and irrecoverably lost.");
+        else
+            snprintf(out->warning, sizeof out->warning,
+                     "Bucket must be empty before removal. Bucket deletion is irreversible.");
+    } else if (strcmp(oper, "presign") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Generates a time-limited pre-signed URL for an S3 object%s%s.",
+                 src ? " at " : "", src ? src : "");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Anyone with this URL can access the object until it expires. "
+                 "Share only with intended recipients.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws s3 %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_aws_ec2(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS EC2 command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "terminate-instances") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently terminates one or more EC2 instances.");
+        out->risk = RISK_CRITICAL;
+        snprintf(out->warning, sizeof out->warning,
+                 "Terminated instances cannot be restarted. "
+                 "Root EBS volumes are deleted by default.");
+        snprintf(out->safer, sizeof out->safer,
+                 "Use 'stop-instances' if you only need to pause the instance.");
+    } else if (strcmp(oper, "stop-instances") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Stops one or more running EC2 instances (EBS data is retained).");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Stopping production instances causes downtime.");
+    } else if (strcmp(oper, "start-instances") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Starts one or more stopped EC2 instances.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "reboot-instances") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Reboots one or more EC2 instances.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Rebooting causes a brief interruption. "
+                 "Plan during a maintenance window.");
+    } else if (strcmp(oper, "run-instances") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Launches new EC2 instances (will incur AWS charges).");
+        out->risk = RISK_LOW;
+    } else if (strncmp(oper, "describe-", 9) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries EC2 resource information (read-only).");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "delete-security-group") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes an EC2 security group.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "Removing a security group may block network access to attached instances.");
+    } else if (strcmp(oper, "authorize-security-group-ingress") == 0) {
+        const char *cidr    = tok_long_val(tl, "--cidr");
+        bool open_world = cidr && (strcmp(cidr, "0.0.0.0/0") == 0 ||
+                                   strcmp(cidr, "::/0") == 0);
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Adds an inbound rule to a security group%s.",
+                 open_world ? " open to the entire internet (0.0.0.0/0)" : "");
+        out->risk = open_world ? RISK_HIGH : RISK_MEDIUM;
+        if (open_world)
+            snprintf(out->warning, sizeof out->warning,
+                     "Allowing 0.0.0.0/0 exposes the port to the entire internet. "
+                     "Restrict --cidr to known IP ranges.");
+    } else if (strcmp(oper, "revoke-security-group-ingress") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Removes an inbound rule from a security group.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Removing an ingress rule may block traffic to running instances.");
+    } else if (strcmp(oper, "create-key-pair") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates an EC2 key pair for SSH instance access.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Protect the private key - it grants SSH access to all instances "
+                 "associated with this pair.");
+    } else if (strcmp(oper, "delete-key-pair") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes an EC2 key pair.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Deleting the key pair does not remove the public key from "
+                 "running instances.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws ec2 %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_aws_iam(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS IAM command.");
+        out->risk = RISK_MEDIUM;
+        return;
+    }
+
+    if (strncmp(oper, "list-", 5) == 0 || strncmp(oper, "get-", 4) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries IAM information (read-only).");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "create-user") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new IAM user.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "delete-user") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently deletes an IAM user.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "All access keys, MFA devices, signing certificates, and group "
+                 "memberships must be removed before the user can be deleted.");
+    } else if (strcmp(oper, "create-access-key") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new AWS access key pair for programmatic API access.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Store the secret access key securely - it cannot be retrieved "
+                 "again after this call.");
+    } else if (strcmp(oper, "delete-access-key") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes an IAM access key.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Any application using this key will immediately lose API access.");
+    } else if (strcmp(oper, "attach-user-policy") == 0 ||
+               strcmp(oper, "attach-role-policy") == 0 ||
+               strcmp(oper, "attach-group-policy") == 0) {
+        const char *arn = tok_long_val(tl, "--policy-arn");
+        bool admin = arn && strstr(arn, "AdministratorAccess") != NULL;
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Attaches a managed IAM policy%s.",
+                 admin ? " (AdministratorAccess - grants full AWS control)" : "");
+        out->risk = admin ? RISK_CRITICAL : RISK_HIGH;
+        if (admin)
+            snprintf(out->warning, sizeof out->warning,
+                     "AdministratorAccess grants unrestricted access to all AWS "
+                     "services and resources. Apply least-privilege policies instead.");
+        else
+            snprintf(out->warning, sizeof out->warning,
+                     "Attaching policies expands what a principal can do across "
+                     "your entire AWS account.");
+    } else if (strcmp(oper, "put-user-policy") == 0 ||
+               strcmp(oper, "put-role-policy") == 0 ||
+               strcmp(oper, "put-group-policy") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Embeds an inline policy directly into a user, role, or group.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "Inline policies can grant broad permissions and are harder to "
+                 "audit than managed policies.");
+    } else if (strcmp(oper, "create-role") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new IAM role.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "delete-role") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently deletes an IAM role.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "Services and resources assuming this role will immediately "
+                 "lose access.");
+    } else if (strcmp(oper, "update-assume-role-policy") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Updates the trust policy that controls who can assume an IAM role.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "Changing the trust policy can grant external accounts the ability "
+                 "to assume this role.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws iam %s'.", oper);
+        out->risk = RISK_MEDIUM;
+    }
+}
+
+static void analyze_aws_rds(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS RDS command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "delete-db-instance") == 0) {
+        bool no_snap = tok_has_long(tl, "--skip-final-snapshot");
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes an RDS database instance%s.",
+                 no_snap ? " without a final snapshot" : "");
+        out->risk = no_snap ? RISK_CRITICAL : RISK_HIGH;
+        if (no_snap) {
+            snprintf(out->warning, sizeof out->warning,
+                     "--skip-final-snapshot means all data is permanently destroyed "
+                     "with no recovery point.");
+            snprintf(out->safer, sizeof out->safer,
+                     "Remove --skip-final-snapshot to take a final backup before deletion.");
+        } else {
+            snprintf(out->warning, sizeof out->warning,
+                     "RDS deletion is irreversible. A final snapshot will be created.");
+        }
+    } else if (strcmp(oper, "delete-db-cluster") == 0) {
+        bool no_snap = tok_has_long(tl, "--skip-final-snapshot");
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes an entire RDS Aurora cluster%s.",
+                 no_snap ? " without a final snapshot" : "");
+        out->risk = no_snap ? RISK_CRITICAL : RISK_HIGH;
+        if (no_snap)
+            snprintf(out->warning, sizeof out->warning,
+                     "--skip-final-snapshot: all Aurora cluster data will be "
+                     "permanently lost with no recovery option.");
+    } else if (strcmp(oper, "create-db-instance") == 0 ||
+               strcmp(oper, "create-db-cluster") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new RDS database instance or cluster "
+                 "(incurs AWS charges).");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "reboot-db-instance") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Reboots an RDS database instance.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Rebooting causes a brief database outage. "
+                 "Plan for a maintenance window.");
+    } else if (strcmp(oper, "restore-db-instance-from-db-snapshot") == 0 ||
+               strcmp(oper, "restore-db-instance-to-point-in-time") == 0 ||
+               strcmp(oper, "restore-db-cluster-from-snapshot") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Restores an RDS database from a snapshot or point-in-time backup.");
+        out->risk = RISK_LOW;
+    } else if (strncmp(oper, "describe-", 9) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries RDS resource information (read-only).");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws rds %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_aws_lambda(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS Lambda command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "delete-function") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently deletes a Lambda function, all its versions "
+                 "and aliases.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "All versions, aliases, and associated event source mappings "
+                 "are removed.");
+    } else if (strcmp(oper, "invoke") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Invokes a Lambda function (may trigger real side effects).");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Lambda invocations execute real code and may modify databases, "
+                 "send messages, or interact with other AWS services.");
+    } else if (strcmp(oper, "update-function-code") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Replaces the deployment package of a live Lambda function.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Updated code is live immediately on the default alias.");
+    } else if (strcmp(oper, "create-function") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new Lambda function.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "add-permission") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Adds a resource-based permission to a Lambda function.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "This controls which AWS services or accounts can invoke the "
+                 "function.");
+    } else if (strncmp(oper, "list-", 5) == 0 ||
+               strncmp(oper, "get-",  4) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries Lambda information (read-only).");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws lambda %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_aws_cloudformation(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS CloudFormation command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "delete-stack") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes a CloudFormation stack and all AWS resources it manages.");
+        out->risk = RISK_CRITICAL;
+        snprintf(out->warning, sizeof out->warning,
+                 "Every AWS resource created by this stack (EC2, RDS, S3, etc.) "
+                 "will be permanently destroyed.");
+        snprintf(out->safer, sizeof out->safer,
+                 "Run 'aws cloudformation describe-stack-resources --stack-name NAME' "
+                 "first to review what will be deleted.");
+    } else if (strcmp(oper, "deploy") == 0 ||
+               strcmp(oper, "create-stack") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deploys or creates a CloudFormation stack "
+                 "(provisions real AWS resources).");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "New AWS resources will be provisioned and charges will be incurred.");
+    } else if (strcmp(oper, "update-stack") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Updates an existing CloudFormation stack in-place.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Stack updates can replace or delete existing resources depending "
+                 "on the template changes.");
+        snprintf(out->safer, sizeof out->safer,
+                 "Use 'create-change-set' then 'describe-change-set' to preview "
+                 "changes before applying.");
+    } else if (strcmp(oper, "create-change-set") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a change set to preview CloudFormation stack updates "
+                 "before applying them.");
+        out->risk = RISK_SAFE;
+    } else if (strncmp(oper, "describe-", 9) == 0 ||
+               strncmp(oper, "list-",    5) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries CloudFormation stack information (read-only).");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws cloudformation %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_aws_eks(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS EKS command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "delete-cluster") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently deletes an EKS Kubernetes cluster.");
+        out->risk = RISK_CRITICAL;
+        snprintf(out->warning, sizeof out->warning,
+                 "All node groups, add-ons, and workloads will be destroyed. "
+                 "Persistent volumes backed by EBS may also be deleted.");
+    } else if (strcmp(oper, "delete-nodegroup") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes an EKS managed node group, terminating its EC2 instances.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "All EC2 instances in this node group will be terminated and "
+                 "workloads evicted.");
+    } else if (strcmp(oper, "update-kubeconfig") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Updates the local kubeconfig to grant kubectl access to an EKS "
+                 "cluster.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "create-cluster") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new EKS Kubernetes cluster (incurs AWS charges).");
+        out->risk = RISK_LOW;
+    } else if (strncmp(oper, "describe-", 9) == 0 ||
+               strncmp(oper, "list-",    5) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries EKS cluster information (read-only).");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws eks %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_aws_secretsmanager(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs an AWS Secrets Manager command.");
+        out->risk = RISK_MEDIUM;
+        return;
+    }
+
+    if (strcmp(oper, "delete-secret") == 0) {
+        bool no_recovery = tok_has_long(tl,
+                               "--force-delete-without-recovery");
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes a secret from AWS Secrets Manager%s.",
+                 no_recovery ? " immediately (no recovery window)" : "");
+        out->risk = no_recovery ? RISK_CRITICAL : RISK_HIGH;
+        if (no_recovery)
+            snprintf(out->warning, sizeof out->warning,
+                     "--force-delete-without-recovery bypasses the 7-30 day "
+                     "recovery window. The secret cannot be restored.");
+        else
+            snprintf(out->warning, sizeof out->warning,
+                     "Secret is recoverable for 7-30 days before permanent "
+                     "deletion.");
+    } else if (strcmp(oper, "get-secret-value") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Retrieves a plaintext secret value from AWS Secrets Manager.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "The secret value will appear in terminal output and shell history. "
+                 "Avoid logging or redirecting to insecure locations.");
+    } else if (strcmp(oper, "create-secret") == 0 ||
+               strcmp(oper, "put-secret-value") == 0 ||
+               strcmp(oper, "update-secret") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Stores or updates a secret value in AWS Secrets Manager.");
+        out->risk = RISK_LOW;
+    } else if (strncmp(oper, "list-",    5) == 0 ||
+               strncmp(oper, "describe-", 9) == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries Secrets Manager information (read-only).");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'aws secretsmanager %s'.", oper);
+        out->risk = RISK_MEDIUM;
+    }
+}
+
+static void analyze_aws_configure(const TokList *tl, Analysis *out)
+{
+    /* tl: aws configure [set|get|list|import|...] [key [value]] */
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper || strcmp(oper, "list") == 0 ||
+        strcmp(oper, "list-profiles") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Displays the current AWS CLI configuration "
+                 "(profile, region, output format, credentials source).");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "get") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Reads a single AWS CLI configuration value.");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "set") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Writes a value to the AWS CLI configuration file.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "import") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Imports AWS credentials from a CSV file into the config.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Imported credentials overwrite the existing ones for "
+                 "the profile.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Configures the AWS CLI interactively (profile, region, "
+                 "credentials, output format).");
+        out->risk = RISK_LOW;
+    }
+}
+
 static CmdEntry cmd_table[] = {
 
     /* shell builtins & everyday utils */
@@ -2675,6 +3281,17 @@ static CmdEntry cmd_table[] = {
     { "git reset",      analyze_git_reset     },
     { "git stash",      analyze_git_stash     },
 
+    /* aws cli */
+    { "aws cloudformation", analyze_aws_cloudformation },
+    { "aws configure",      analyze_aws_configure      },
+    { "aws ec2",            analyze_aws_ec2            },
+    { "aws eks",            analyze_aws_eks            },
+    { "aws iam",            analyze_aws_iam            },
+    { "aws lambda",         analyze_aws_lambda         },
+    { "aws rds",            analyze_aws_rds            },
+    { "aws s3",             analyze_aws_s3             },
+    { "aws secretsmanager", analyze_aws_secretsmanager },
+
     /* sheer itself - why not */
     { "sheer",          analyze_sheer         },
     { "shrun",          analyze_shrun         },
@@ -2713,7 +3330,7 @@ static void ensure_table_sorted(void)
 static bool is_compound_prefix(const char *name)
 {
     static const char *const prefixes[] = {
-        "docker", "git", "kubectl", "npm", "pip",
+        "aws", "docker", "gcloud", "git", "heroku", "kubectl", "npm", "pip",
     };
     for (size_t i = 0; i < sizeof prefixes / sizeof prefixes[0]; i++)
         if (strcmp(name, prefixes[i]) == 0) return true;
