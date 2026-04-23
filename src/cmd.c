@@ -2564,6 +2564,565 @@ static void analyze_xargs(const TokList *tl, Analysis *out)
                  "Try: xargs echo %s first to preview what would be passed.", subcmd);
 }
 
+/* ------------------------------------------------------------ gcloud cli */
+
+static void analyze_gcloud_compute(const TokList *tl, Analysis *out)
+{
+    const Tok *res    = tok_first_word(tl, 2);
+    const char *rname = res ? res->s : NULL;
+    const Tok *act    = res
+        ? tok_first_word(tl, (int)(res - tl->t) + 1)
+        : NULL;
+    const char *aname = act ? act->s : NULL;
+
+    if (!rname) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud Compute Engine command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(rname, "instances") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes one or more Compute Engine VM instances.");
+            out->risk = RISK_CRITICAL;
+            snprintf(out->warning, sizeof out->warning,
+                     "Deleted instances and their boot disks are permanently destroyed "
+                     "(unless the disk's auto-delete setting is off).");
+        } else if (aname && strcmp(aname, "stop") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Stops (shuts down) one or more Compute Engine VM instances.");
+            out->risk = RISK_MEDIUM;
+            snprintf(out->warning, sizeof out->warning,
+                     "Stopped instances still incur charges for reserved static IPs "
+                     "and attached persistent disks.");
+        } else if (aname && strcmp(aname, "start") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Starts one or more stopped Compute Engine VM instances.");
+            out->risk = RISK_LOW;
+        } else if (aname && strcmp(aname, "reset") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Hard-resets (power-cycles) Compute Engine VM instances.");
+            out->risk = RISK_MEDIUM;
+            snprintf(out->warning, sizeof out->warning,
+                     "Hard reset is equivalent to pulling the power cord - "
+                     "unsaved data may be lost.");
+        } else if (aname && strcmp(aname, "create") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Creates new Compute Engine VM instances (incurs GCP charges).");
+            out->risk = RISK_LOW;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages Compute Engine VM instances.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "disks") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes one or more Compute Engine persistent disks.");
+            out->risk = RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "Disk deletion is irreversible and all stored data will be lost.");
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages Compute Engine persistent disks.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "firewall-rules") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Deletes a Compute Engine VPC firewall rule.");
+            out->risk = RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "Removing a firewall rule may block traffic to running instances.");
+        } else if (aname && strcmp(aname, "create") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Creates a new Compute Engine VPC firewall rule.");
+            out->risk = RISK_MEDIUM;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages Compute Engine VPC firewall rules.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "snapshots") == 0 &&
+               aname && strcmp(aname, "delete") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently deletes one or more disk snapshots.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "Deleted snapshots cannot be recovered.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud compute %s'.", rname);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_sql(const TokList *tl, Analysis *out)
+{
+    const Tok *res    = tok_first_word(tl, 2);
+    const char *rname = res ? res->s : NULL;
+    const Tok *act    = res
+        ? tok_first_word(tl, (int)(res - tl->t) + 1)
+        : NULL;
+    const char *aname = act ? act->s : NULL;
+
+    if (!rname) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud Cloud SQL command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(rname, "instances") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes a Cloud SQL database instance.");
+            out->risk = RISK_CRITICAL;
+            snprintf(out->warning, sizeof out->warning,
+                     "All data and automated backups for this instance are "
+                     "permanently destroyed.");
+        } else if (aname && strcmp(aname, "restart") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Restarts a Cloud SQL database instance.");
+            out->risk = RISK_MEDIUM;
+            snprintf(out->warning, sizeof out->warning,
+                     "Restarting causes a brief database outage. "
+                     "Plan for a maintenance window.");
+        } else if (aname && strcmp(aname, "create") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Creates a new Cloud SQL instance (incurs GCP charges).");
+            out->risk = RISK_LOW;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages Cloud SQL instances.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "databases") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes a database from a Cloud SQL instance.");
+            out->risk = RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "All tables and data in this database are permanently destroyed.");
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages databases within a Cloud SQL instance.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "backups") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Deletes a Cloud SQL backup.");
+            out->risk = RISK_MEDIUM;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages Cloud SQL backups.");
+            out->risk = RISK_SAFE;
+        }
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud sql %s'.", rname);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_container(const TokList *tl, Analysis *out)
+{
+    const Tok *res    = tok_first_word(tl, 2);
+    const char *rname = res ? res->s : NULL;
+    const Tok *act    = res
+        ? tok_first_word(tl, (int)(res - tl->t) + 1)
+        : NULL;
+    const char *aname = act ? act->s : NULL;
+
+    if (!rname) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud GKE / Container command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(rname, "clusters") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes a GKE Kubernetes cluster.");
+            out->risk = RISK_CRITICAL;
+            snprintf(out->warning, sizeof out->warning,
+                     "All nodes, workloads, and cluster configuration will be "
+                     "destroyed. Persistent volumes may also be deleted.");
+        } else if (aname && strcmp(aname, "get-credentials") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Updates the local kubeconfig with credentials for the GKE "
+                     "cluster.");
+            out->risk = RISK_LOW;
+        } else if (aname && strcmp(aname, "create") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Creates a new GKE Kubernetes cluster (incurs GCP charges).");
+            out->risk = RISK_LOW;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages GKE clusters.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "node-pools") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Deletes a GKE node pool, draining and terminating its nodes.");
+            out->risk = RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "Workloads on these nodes will be evicted. Ensure they can be "
+                     "rescheduled on other pools.");
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages GKE node pools.");
+            out->risk = RISK_LOW;
+        }
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud container %s'.", rname);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_iam(const TokList *tl, Analysis *out)
+{
+    const Tok *res    = tok_first_word(tl, 2);
+    const char *rname = res ? res->s : NULL;
+    const Tok *act    = res
+        ? tok_first_word(tl, (int)(res - tl->t) + 1)
+        : NULL;
+    const char *aname = act ? act->s : NULL;
+
+    if (!rname) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud IAM command.");
+        out->risk = RISK_MEDIUM;
+        return;
+    }
+
+    if (strcmp(rname, "service-accounts") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes a GCP service account.");
+            out->risk = RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "Services and workloads authenticating as this account will "
+                     "immediately lose access.");
+        } else if (aname && strcmp(aname, "create") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Creates a new GCP service account.");
+            out->risk = RISK_LOW;
+        } else if (aname && strcmp(aname, "keys") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages service account keys.");
+            out->risk = RISK_MEDIUM;
+            snprintf(out->warning, sizeof out->warning,
+                     "Service account keys are long-lived credentials. "
+                     "Prefer Workload Identity Federation over downloadable key "
+                     "files.");
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages GCP service accounts.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "roles") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Manages GCP IAM custom roles.");
+        out->risk = RISK_MEDIUM;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud iam %s'.", rname);
+        out->risk = RISK_MEDIUM;
+    }
+}
+
+static void analyze_gcloud_projects(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud projects command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "delete") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Schedules the entire GCP project for deletion.");
+        out->risk = RISK_CRITICAL;
+        snprintf(out->warning, sizeof out->warning,
+                 "All resources in the project (VMs, databases, buckets, etc.) "
+                 "will be permanently destroyed after a 30-day grace period. "
+                 "This cannot easily be reversed.");
+    } else if (strcmp(oper, "create") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Creates a new GCP project.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "list") == 0 ||
+               strcmp(oper, "describe") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Lists or describes GCP projects (read-only).");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "add-iam-policy-binding") == 0) {
+        const char *role  = tok_long_val(tl, "--role");
+        bool owner = role && strstr(role, "roles/owner") != NULL;
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Grants a GCP IAM role at the project level%s.",
+                 owner ? " (roles/owner - full project control)" : "");
+        out->risk = owner ? RISK_CRITICAL : RISK_HIGH;
+        if (owner)
+            snprintf(out->warning, sizeof out->warning,
+                     "Granting 'roles/owner' gives the principal unrestricted control "
+                     "over the entire GCP project and all its resources.");
+        else
+            snprintf(out->warning, sizeof out->warning,
+                     "Project-level IAM bindings affect all resources in the project.");
+    } else if (strcmp(oper, "remove-iam-policy-binding") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Revokes a GCP IAM role binding at the project level.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Revoking a binding may break access for services relying on it.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud projects %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_functions(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud Cloud Functions command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "delete") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Permanently deletes a Cloud Function.");
+        out->risk = RISK_HIGH;
+        snprintf(out->warning, sizeof out->warning,
+                 "All function versions and event triggers are removed.");
+    } else if (strcmp(oper, "deploy") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deploys or updates a Cloud Function to production.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "The new function code is live immediately after deployment.");
+    } else if (strcmp(oper, "call") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Invokes a Cloud Function (executes real code with possible "
+                 "side effects).");
+        out->risk = RISK_MEDIUM;
+    } else if (strcmp(oper, "list") == 0   ||
+               strcmp(oper, "describe") == 0 ||
+               strcmp(oper, "logs") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries Cloud Function information or logs (read-only).");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud functions %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_app(const TokList *tl, Analysis *out)
+{
+    const Tok *res    = tok_first_word(tl, 2);
+    const char *rname = res ? res->s : NULL;
+    const Tok *act    = res
+        ? tok_first_word(tl, (int)(res - tl->t) + 1)
+        : NULL;
+    const char *aname = act ? act->s : NULL;
+
+    if (!rname) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud App Engine command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(rname, "deploy") == 0) {
+        bool no_promote = tok_has_long(tl, "--no-promote");
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deploys an App Engine application%s.",
+                 no_promote ? " (without shifting traffic)" : " to production");
+        out->risk = no_promote ? RISK_LOW : RISK_MEDIUM;
+        if (!no_promote) {
+            snprintf(out->warning, sizeof out->warning,
+                     "Traffic is migrated to the new version immediately.");
+            snprintf(out->safer, sizeof out->safer,
+                     "Use --no-promote to deploy first and validate before "
+                     "shifting traffic.");
+        }
+    } else if (strcmp(rname, "versions") == 0) {
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Deletes one or more App Engine versions.");
+            out->risk = RISK_MEDIUM;
+        } else if (aname && strcmp(aname, "stop") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Stops one or more App Engine versions from serving traffic.");
+            out->risk = RISK_MEDIUM;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages App Engine versions.");
+            out->risk = RISK_LOW;
+        }
+    } else if (strcmp(rname, "browse") == 0  ||
+               strcmp(rname, "describe") == 0 ||
+               strcmp(rname, "logs") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Queries App Engine information or opens the app in a browser.");
+        out->risk = RISK_SAFE;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud app %s'.", rname);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_storage(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+    bool recursive   = tok_has_short(tl, 'r') || tok_has_short(tl, 'R') ||
+                       tok_has_long(tl, "--recursive");
+
+    if (!oper) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs a gcloud Cloud Storage command.");
+        out->risk = RISK_LOW;
+        return;
+    }
+
+    if (strcmp(oper, "rm") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Deletes Cloud Storage objects%s.",
+                 recursive ? " recursively" : "");
+        out->risk = recursive ? RISK_HIGH : RISK_MEDIUM;
+        if (recursive)
+            snprintf(out->warning, sizeof out->warning,
+                     "-r deletes all objects under the prefix permanently "
+                     "(unless object versioning is enabled).");
+    } else if (strcmp(oper, "cp") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Copies Cloud Storage objects.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "mv") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Moves (renames) Cloud Storage objects.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "ls") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Lists Cloud Storage buckets or objects.");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "buckets") == 0) {
+        const Tok *act    = op
+            ? tok_first_word(tl, (int)(op - tl->t) + 1)
+            : NULL;
+        const char *aname = act ? act->s : NULL;
+        if (aname && strcmp(aname, "delete") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Permanently deletes a Cloud Storage bucket.");
+            out->risk = RISK_HIGH;
+            snprintf(out->warning, sizeof out->warning,
+                     "Bucket must be empty. Deletion is irreversible.");
+        } else if (aname && strcmp(aname, "create") == 0) {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Creates a new Cloud Storage bucket.");
+            out->risk = RISK_LOW;
+        } else {
+            snprintf(out->explanation, sizeof out->explanation,
+                     "Manages Cloud Storage buckets.");
+            out->risk = RISK_LOW;
+        }
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud storage %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_auth(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper || strcmp(oper, "login") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Opens a browser to authenticate with Google Cloud.");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "revoke") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Revokes GCP credentials for one or all accounts.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "Revoking credentials requires re-authentication before "
+                 "any further gcloud use.");
+    } else if (strcmp(oper, "configure-docker") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Configures Docker to use gcloud credentials for "
+                 "GCR / Artifact Registry.");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "activate-service-account") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Activates a service account as the active gcloud identity.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "All subsequent gcloud commands run as this service account. "
+                 "Ensure it holds only the permissions it needs.");
+    } else if (strcmp(oper, "print-access-token") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Prints the current GCP OAuth2 access token to stdout.");
+        out->risk = RISK_MEDIUM;
+        snprintf(out->warning, sizeof out->warning,
+                 "The token appears in terminal output and shell history. "
+                 "Treat it like a password.");
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud auth %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
+static void analyze_gcloud_config(const TokList *tl, Analysis *out)
+{
+    const Tok *op    = tok_first_word(tl, 2);
+    const char *oper = op ? op->s : NULL;
+
+    if (!oper || strcmp(oper, "list") == 0 ||
+        strcmp(oper, "get-value") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Displays gcloud configuration (active project, region, "
+                 "account).");
+        out->risk = RISK_SAFE;
+    } else if (strcmp(oper, "set") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Sets a gcloud configuration property (e.g. project, region, "
+                 "account).");
+        out->risk = RISK_LOW;
+    } else if (strcmp(oper, "unset") == 0) {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Clears a gcloud configuration property.");
+        out->risk = RISK_LOW;
+    } else {
+        snprintf(out->explanation, sizeof out->explanation,
+                 "Runs 'gcloud config %s'.", oper);
+        out->risk = RISK_LOW;
+    }
+}
+
 /* ----------------------------------------------------------- heroku cli */
 
 static void analyze_heroku_destroy(const TokList *tl, Analysis *out)
@@ -3481,6 +4040,18 @@ static CmdEntry cmd_table[] = {
     { "git rebase",     analyze_git_rebase    },
     { "git reset",      analyze_git_reset     },
     { "git stash",      analyze_git_stash     },
+
+    /* gcloud cli */
+    { "gcloud app",       analyze_gcloud_app       },
+    { "gcloud auth",      analyze_gcloud_auth      },
+    { "gcloud compute",   analyze_gcloud_compute   },
+    { "gcloud config",    analyze_gcloud_config    },
+    { "gcloud container", analyze_gcloud_container },
+    { "gcloud functions", analyze_gcloud_functions },
+    { "gcloud iam",       analyze_gcloud_iam       },
+    { "gcloud projects",  analyze_gcloud_projects  },
+    { "gcloud sql",       analyze_gcloud_sql       },
+    { "gcloud storage",   analyze_gcloud_storage   },
 
     /* heroku cli */
     { "heroku addons:create",      analyze_heroku_addons_create      },
